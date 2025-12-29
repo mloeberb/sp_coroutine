@@ -1,62 +1,72 @@
 # SPCorLib Limitations
 
-## Fundamental Constraint with setjmp/longjmp
+## Implementation Approach
 
-This library uses `setjmp/longjmp` for context switching, which has fundamental limitations:
+This library uses a **recursive stack-building technique** combined with `setjmp/longjmp` for context switching. During initialization, the library recursively calls a function to build N stack frames (where N is the pool capacity). Each frame allocates its own stack space via a local array, creating separate stacks for each coroutine without requiring platform-specific assembly or deprecated APIs.
 
-### The Problem
+## How It Works
 
-`setjmp` saves the execution context (stack pointer, program counter, registers) at the point it's called. `longjmp` restores that context. However, **the saved context is only valid as long as the stack frame where setjmp was called remains on the stack**.
+The key insight is that recursive function calls create persistent stack frames:
 
-Once a function returns, its stack frame is unwound, and any saved contexts pointing to that frame become invalid. Jumping to an invalid context causes undefined behavior (usually a segfault).
-
-### What This Means
-
-**Asymmetric coroutines with arbitrary call chains are impossible with pure setjmp/longjmp.**
-
-In the original design, we wanted:
+```c
+void recursive_stack_builder(pool, depth) {
+    char stack_space[stack_size];  // This frame's stack
+    
+    if (setjmp(frame_contexts[depth]) == 0) {
+        // First time: build deeper frames
+        if (depth < capacity - 1)
+            recursive_stack_builder(pool, depth + 1);
+        else
+            execute_main_coroutine();
+    } else {
+        // Longjmp brought us back: execute assigned coroutine
+        execute_coroutine_at_depth(depth);
+    }
+}
 ```
-Scheduler (main) calls sp_co_go(ping)
-  → ping yields back to scheduler
-  → scheduler calls sp_co_go(pong) 
-  → pong yields back to scheduler
-  → repeat
-```
 
-This fails because:
-1. `sp_co_go(ping)` saves scheduler's context in its stack frame
-2. ping yields, jumping back to sp_co_go's saved context
-3. `sp_co_go` returns normally, unwinding its frame
-4. `sp_co_go(pong)` is called, saving a NEW context in a NEW frame
-5. When pong yields, it tries to jump back, but that frame is gone
-6. Segfault
+When a coroutine is activated, it's assigned to a free frame and we longjmp to that frame. The coroutine executes in that frame's stack space. When it yields, the context is saved and we longjmp back to the caller. The frame remains on the stack, so the saved context stays valid.
 
-### Current Solution
+## Actual Limitations
 
-The library now implements a **simplified asymmetric model**:
+### 1. Fixed Stack Size Per Coroutine
 
-- The main coroutine executes directly in the trampoline (no setjmp/longjmp for first call)
-- Worker coroutines can yield back to a single saved context (the return point in sp_co_start)
-- **Workers cannot call sp_co_go to activate other workers**
-- The main coroutine can activate workers, but each activation happens in a potentially different stack frame
+Each coroutine gets a fixed stack allocation determined at pool creation (between 16KB and 8MB). Stacks cannot grow dynamically. If a coroutine exceeds its stack space, stack overflow detection will trigger an error.
 
-This means:
-- ✅ Main scheduler can call sp_co_go on workers
-- ✅ Workers can yield back
-- ❌ Workers cannot activate other workers (would save invalid contexts)
-- ❌ Complex coroutine call chains are not supported
+### 2. Maximum Coroutine Count Limited by Stack Depth
 
-### Alternative Approaches
+The recursive approach builds N stack frames where N is the pool capacity. Very large N (thousands of coroutines) could exhaust the process's stack space during initialization. Practical limits depend on the platform's stack size limits.
 
-To get full asymmetric coroutines with arbitrary call chains, you need:
+### 3. Pool is Single-Use
 
-1. **Platform-specific stack switching**: Use assembly to switch stacks (like `ucontext`, `makecontext`, or manual stack pointer manipulation)
-2. **Separate stacks per coroutine**: Allocate actual separate stacks, not just sentinel regions
-3. **Fiber libraries**: Use OS-provided fiber APIs (Windows) or third-party libraries
+Once `sp_co_start()` returns, the recursive stack frames unwind and the `alloca()`-allocated memory is deallocated. The pool cannot be restarted or reused.
 
-This library deliberately avoids those approaches to remain portable and simple, at the cost of limited coroutine capabilities.
+### 4. Hierarchical Execution Model
 
-### Recommended Usage Pattern
+This is asymmetric coroutine model by design:
+- ✅ Main scheduler coroutine can call `sp_co_go()` to activate workers
+- ✅ Workers can yield back to their caller
+- ❌ Workers cannot call `sp_co_go()` to activate other workers directly
+
+This hierarchical model is intentional for asymmetric coroutines. If you need symmetric coroutines (where any coroutine can transfer control to any other), a different library design is required.
+
+### 5. Frame Reuse
+
+When a coroutine completes, its frame becomes available for reuse. However, you cannot have more **simultaneously active** coroutines than the pool capacity. Dead coroutines free their frames automatically.
+
+### 6. No Dynamic Growth
+
+Both stack sizes and pool capacity are fixed at pool creation time and cannot be changed or grown dynamically.
+
+## What Works Perfectly
+
+✅ **Multiple yields and resumes** - Coroutines can yield and be resumed unlimited times  
+✅ **Round-robin scheduling** - Multiple coroutines can be scheduled cooperatively  
+✅ **Stack overflow detection** - Sentinels detect stack corruption  
+✅ **Portable C99** - No assembly, no deprecated APIs, works on all platforms  
+✅ **Separate stacks** - Each coroutine has its own stack space via recursive frames  
+
+## Recommended Usage Pattern
 
 ```c
 void worker(void* arg) {
@@ -82,11 +92,4 @@ void main_scheduler(void* arg) {
 sp_co_start(pool, scheduler_co);
 ```
 
-### Why Not Just Fix It?
-
-To support the original design requires:
-- Either makecontext/swapcontext (not portable, deprecated)
-- Or platform-specific assembly (x86/ARM/etc stack switching code)
-- Or a trampoline-based approach where ALL function calls go through a dispatcher (complex, slow)
-
-These solutions violate the design goal of a simple, portable, C99-standard library.
+This pattern works reliably with unlimited yields and resumes per coroutine.

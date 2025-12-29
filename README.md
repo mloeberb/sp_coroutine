@@ -1,61 +1,49 @@
 # SPCorLib - Simple Coroutine Library
 
-Asymmetric coroutine library for C using setjmp/longjmp with stack partitioning via alloca().
+Asymmetric coroutine library for C using recursive stack frames and setjmp/longjmp.
 
-## Current Status
+## Status
 
-⚠️ **Known Issue**: The implementation has a fundamental limitation with setjmp/longjmp when coroutines are resumed multiple times. This is due to stack frame lifecycle - when `sp_co_go` returns, its stack frame is unwound, but the coroutine's saved context still references that frame.
+✅ **Fully Working** - Multiple yields, resumes, and round-robin scheduling all work correctly!
 
 ### What Works
-- Creating pools with alloca()-allocated memory partitioned among coroutines
+- Creating pools with separate stack space per coroutine
 - Stack sentinel placement for overflow detection  
-- First activation of coroutines
-- Single yield-resume cycle
-
-### What Doesn't Work
-- Multiple yield-resume cycles (segfault on second resume)
-- This is a fundamental limitation of setjmp/longjmp with shared stacks
-
-## The Problem
-
-With setjmp/longjmp:
-1. All coroutines share the C call stack
-2. `setjmp` saves register state including stack pointer
-3. When `sp_co_go` returns, its stack frame is deallocated
-4. Attempting to `longjmp` back to that context causes undefined behavior
-
-## Solutions
-
-To fix this, one of the following is needed:
-
-1. **Use ucontext API** - Provides proper coroutine support but deprecated in POSIX
-2. **Platform-specific assembly** - Manually implement stack switching  
-3. **Redesign API** - Make `sp_co_go` not return until coroutine completes
-4. **Accept limitation** - Document that coroutines can only yield once
+- Multiple yield and resume cycles
+- Round-robin and cooperative scheduling
+- Multiple simultaneous coroutines
+- Portable C99 implementation (no assembly or deprecated APIs)
 
 ## Architecture
 
-The current design:
-- Pool created with configurable coroutine count and stack size per coroutine
-- `sp_co_start` uses `alloca(capacity * stack_size)` to allocate monitoring region
-- Region partitioned with sentinels at boundaries (0xDEADC0C0)
-- Sentinels checked on every yield/resume to detect stack overflow
-- setjmp/longjmp handles context switching (registers only, not actual stack switching)
+The library uses a novel **recursive stack-building approach**:
+
+1. Pool created with configurable coroutine count and stack size per coroutine
+2. `sp_co_start` recursively calls a function N times (N = capacity)
+3. Each recursive call allocates a local array for that coroutine's stack
+4. Each frame saves its context with `setjmp`
+5. Coroutines are assigned to frames and activated via `longjmp`
+6. When coroutines yield, they save context and jump back to caller
+7. Frames persist on the stack, keeping contexts valid
+
+This provides true separate stacks for each coroutine using only standard C!
 
 ## Files
 
 - `sp_coroutine.h` - Public API with full documentation
-- `sp_coroutine.c` - Implementation with alloca() partitioning and sentinels
+- `sp_coroutine.c` - Implementation with recursive stack frames
 - `Makefile` - Build system
-- `example.c` - Ping-pong demonstration
-- `DESIGN_NOTES.md` - Technical design discussions
+- `test_simple.c` - Simple example with one worker
+- `test_multi_worker.c` - Complex example with 3 workers in round-robin
+- `LIMITATIONS.md` - Known limitations and constraints
 
 ## Building
 
 ```bash
-make            # Build library and example
-make run        # Run example
-make clean      # Clean build artifacts
+make                # Build all examples
+make run-simple     # Run simple example
+make run-multi      # Run multi-worker example
+make clean          # Clean build artifacts
 ```
 
 ## API Summary
@@ -81,12 +69,6 @@ size_t sp_co_pool_capacity(sp_co_pool_handle_t pool);
 size_t sp_co_pool_count(sp_co_pool_handle_t pool);
 ```
 
-## Next Steps
+## Example Usage
 
-To complete the implementation, choose one of:
-
-1. Replace setjmp/longjmp with ucontext (`makecontext`/`swapcontext`)
-2. Add platform-specific stack switching in assembly
-3. Restructure to keep `sp_co_go` stack frames alive
-
-The current code provides a solid foundation with all the infrastructure (pool management, sentinels, API design) but needs one of the above approaches for full coroutine support.
+See `test_simple.c` for a basic example and `test_multi_worker.c` for round-robin scheduling with multiple workers.
