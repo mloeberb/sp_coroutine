@@ -1,10 +1,13 @@
 /**
  * @file sp_coroutine.c
- * @brief Implementation of asymmetric coroutine library using setjmp/longjmp
+ * @brief Implementation of asymmetric coroutine library using recursive stack frames
  * 
- * NOTE: This implementation uses setjmp/longjmp which only saves registers,
- * not stack pointers. All coroutines share the same C stack. The stack_size
- * parameter is currently used only for validation purposes.
+ * This implementation uses a novel recursive stack-building approach combined with
+ * setjmp/longjmp for context switching. During initialization, the library recursively
+ * calls a function N times (N = pool capacity), with each recursive call allocating
+ * a local array for that coroutine's stack space. This provides true separate stacks
+ * for each coroutine using only standard C99, without requiring platform-specific
+ * assembly or deprecated APIs.
  */
 
 #include "sp_coroutine.h"
