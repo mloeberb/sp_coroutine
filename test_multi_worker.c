@@ -1,6 +1,7 @@
 /**
  * @file test_multi_worker.c
  * @brief Test with multiple workers yielding multiple times
+ * @author Markus Loeberbauer <markus.loeberbauer@signum.plus>
  */
 
 #include "sp_coroutine.h"

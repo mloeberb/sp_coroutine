@@ -1,7 +1,7 @@
 /**
  * @file sp_coroutine.c
  * @brief Implementation of asymmetric coroutine library using recursive stack frames
- * @author Markus Loeberbauer
+ * @author Markus Loeberbauer <markus.loeberbauer@signum.plus>
  * 
  * This implementation uses a recursive stack-building approach combined with
  * setjmp/longjmp for context switching. During initialization, the library recursively

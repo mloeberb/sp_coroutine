@@ -1,7 +1,7 @@
 /**
  * @file sp_coroutine.h
  * @brief Simple asymmetric coroutine library using setjmp/longjmp
- * @author Markus Loeberbauer
+ * @author Markus Loeberbauer <markus.loeberbauer@signum.plus>
  * 
  * This library provides cooperative multitasking with asymmetric coroutines.
  * Coroutines yield control back to their caller, creating a hierarchical
