@@ -10,19 +10,18 @@
  * @example Basic Usage
  * @code
  * void worker(void* arg) {
- *     int* count = (int*)arg;
- *     for (int i = 0; i < *count; i++) {
+ *     sp_co_pool_handle_t pool = (sp_co_pool_handle_t)arg;
+ *     for (int i = 0; i < 3; i++) {
  *         printf("Worker iteration %d\n", i);
  *         sp_co_yield(pool);
  *     }
  * }
- * 
+ *
  * void scheduler(void* arg) {
  *     sp_co_pool_handle_t pool = (sp_co_pool_handle_t)arg;
- *     int count = 3;
- *     sp_co_handle_t co = sp_co_add(pool, worker, &count);
- *     
- *     for (int i = 0; i < count; i++) {
+ *     sp_co_handle_t co = sp_co_add(pool, worker, pool);
+ *
+ *     for (int i = 0; i < 3; i++) {
  *         printf("Scheduler activating worker\n");
  *         sp_co_go(pool, co);
  *     }
@@ -128,8 +127,7 @@ sp_co_handle_t sp_co_add(sp_co_pool_handle_t pool, sp_co_func_t func, void* arg)
 /**
  * @brief Remove a coroutine from the pool
  * 
- * Frees a coroutine slot for reuse. Coroutine must be in DEAD state
- * (not RUNNING).
+ * Frees a coroutine slot for reuse. Coroutine must not be RUNNING.
  * 
  * @param pool Pool handle
  * @param co Coroutine handle to remove
@@ -195,7 +193,7 @@ int sp_co_start(sp_co_pool_handle_t pool, sp_co_handle_t co);
  * 
  * Transfers control to the specified coroutine. When the coroutine yields,
  * control returns to the caller. On first activation of a READY coroutine,
- * allocates stack and initializes context.
+ * assigns one of the pre-built stack frames to the coroutine.
  * 
  * @param pool Pool handle
  * @param co Coroutine to activate (must be READY or SUSPENDED)
