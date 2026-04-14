@@ -3,12 +3,11 @@
  * @brief Implementation of asymmetric coroutine library using recursive stack frames
  * @author Markus Loeberbauer
  * 
- * This implementation uses a novel recursive stack-building approach combined with
+ * This implementation uses a recursive stack-building approach combined with
  * setjmp/longjmp for context switching. During initialization, the library recursively
- * calls a function N times (N = pool capacity), with each recursive call allocating
- * a local array for that coroutine's stack space. This provides true separate stacks
- * for each coroutine using only standard C99, without requiring platform-specific
- * assembly or deprecated APIs.
+ * calls a function N times (N = pool capacity), with each recursive call reserving
+ * stack space via alloca for that coroutine. This provides separate stacks for each
+ * coroutine without requiring platform-specific assembly or deprecated APIs.
  */
 
 #include "sp_coroutine.h"
@@ -16,7 +15,12 @@
 #include <setjmp.h>
 #include <string.h>
 #include <stdint.h>
+#ifdef _MSC_VER
+#include <malloc.h>
+#define alloca _alloca
+#else
 #include <alloca.h>
+#endif
 
 /* Stack size limits */
 #define SP_CO_MIN_STACK_SIZE (16 * 1024)      /* 16 KB */
@@ -283,16 +287,16 @@ static void init_coroutine_sentinels(struct sp_co_pool* pool) {
 
 /**
  * @brief Recursively build stack frames for coroutines
- * 
+ *
  * This function recursively calls itself to build N stack frames, each with
- * its own stack space reserved via a local array. Each frame saves its context
+ * its own stack space reserved via alloca. Each frame saves its context
  * so coroutines can be assigned to frames and longjmp to them later.
  */
 static void recursive_stack_builder(struct sp_co_pool* pool, size_t depth, sp_co_handle_t main_co) {
     /* Reserve this frame's stack space */
-    volatile char stack_space[pool->stack_size];
-    
-    /* Touch the array to prevent optimization */
+    volatile char* stack_space = (volatile char*)alloca(pool->stack_size);
+
+    /* Touch the memory to prevent optimization */
     stack_space[0] = 0;
     stack_space[pool->stack_size - 1] = 0;
     
