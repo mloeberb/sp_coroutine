@@ -37,4 +37,3 @@ run-multi: test_multi_worker
 	./test_multi_worker
 
 .PHONY: all clean run-simple run-multi
-.PHONY: all clean run

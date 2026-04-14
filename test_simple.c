@@ -1,6 +1,7 @@
 /**
  * @file test_simple.c
  * @brief Very simple test
+ * @author Markus Loeberbauer
  */
 
 #include "sp_coroutine.h"

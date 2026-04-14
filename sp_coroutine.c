@@ -1,6 +1,7 @@
 /**
  * @file sp_coroutine.c
  * @brief Implementation of asymmetric coroutine library using recursive stack frames
+ * @author Markus Loeberbauer
  * 
  * This implementation uses a novel recursive stack-building approach combined with
  * setjmp/longjmp for context switching. During initialization, the library recursively
@@ -22,7 +23,7 @@
 #define SP_CO_MAX_STACK_SIZE (8 * 1024 * 1024) /* 8 MB */
 
 /* Magic number for stack sentinel validation */
-#define SP_CO_STACK_MAGIC 0xDEADC0C0
+#define SP_CO_STACK_MAGIC 0x4C4F4542
 
 /* Stack alignment */
 #define STACK_ALIGN 16
@@ -34,8 +35,10 @@ struct sp_coroutine {
     jmp_buf context;              /* Saved execution context */
     int state;                    /* Current state (SP_CO_STATE_*) */
     sp_co_func_t func;            /* User function to execute */
-    void* arg;                    /* Argument for user function */    unsigned int* sentinel_low;   /* Low address sentinel */
-    unsigned int* sentinel_high;  /* High address sentinel */    struct sp_coroutine* caller;  /* Coroutine that activated this one */
+    void* arg;                    /* Argument for user function */
+    unsigned int* sentinel_low;   /* Low address sentinel */
+    unsigned int* sentinel_high;  /* High address sentinel */
+    struct sp_coroutine* caller;  /* Coroutine that activated this one */
     int is_main;                  /* Flag: 1 if this is the main coroutine */
     int started;                  /* Flag: coroutine has begun execution */
     int frame_index;              /* Which stack frame this coroutine owns (-1 if none) */
