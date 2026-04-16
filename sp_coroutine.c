@@ -47,7 +47,6 @@ struct sp_coroutine {
     void* arg;                    // Argument for user function
     struct sp_coroutine* caller;  // Coroutine that activated this one
     bool is_main;                 // True if this is the main coroutine
-    bool started;                 // True if coroutine has begun execution
     int frame_index;              // Which stack frame this coroutine owns (-1 if none)
 };
 
@@ -290,7 +289,6 @@ static void recursive_stack_builder(struct sp_co_pool* pool, size_t depth, sp_co
             // All frames built - start main coroutine execution
             pool->current = main_co;
             main_co->state = SP_CO_STATE_RUNNING;
-            main_co->started = true;
             main_co->is_main = true;
             main_co->frame_index = -1;  // Main doesn't own a frame
             coroutine_exec(pool, main_co);
@@ -300,7 +298,6 @@ static void recursive_stack_builder(struct sp_co_pool* pool, size_t depth, sp_co
 
     // Longjmp'd here to run a newly-assigned coroutine in this frame
     struct sp_coroutine* co = pool->frame_coroutine[depth];
-    co->started = true;
     co->state = SP_CO_STATE_RUNNING;
     pool->current = co;
     coroutine_exec(pool, co);
