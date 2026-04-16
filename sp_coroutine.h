@@ -69,7 +69,8 @@ typedef enum {
     SP_CO_ERR_INVALID = -1,          /**< Invalid parameter (NULL handle) */
     SP_CO_ERR_STATE = -2,            /**< Invalid coroutine state for operation */
     SP_CO_ERR_YIELD_FROM_MAIN = -3,  /**< Attempted yield from main coroutine */
-    SP_CO_ERR_STACK_OVERFLOW = -4    /**< Coroutine exceeded its stack budget */
+    SP_CO_ERR_STACK_OVERFLOW = -4,   /**< Coroutine exceeded its stack budget */
+    SP_CO_ERR_BAD_RESUMER = -5       /**< Suspended coroutine resumed by non-original caller */
 } sp_co_result_t;
 
 /**
@@ -197,6 +198,8 @@ sp_co_result_t sp_co_start(sp_co_pool_handle_t pool, sp_co_handle_t co);
  *         SP_CO_ERR_INVALID if handles are NULL,
  *         SP_CO_ERR_STATE if called from outside a running coroutine,
  *         SP_CO_ERR_STATE if coroutine is not READY or SUSPENDED,
+ *         SP_CO_ERR_BAD_RESUMER if a SUSPENDED coroutine is resumed by a
+ *             coroutine other than its original caller,
  *         SP_CO_ERR_STACK_OVERFLOW if the coroutine exceeded its stack budget
  *             (the pool should be considered unusable after this error)
  */

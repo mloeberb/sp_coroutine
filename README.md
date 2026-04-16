@@ -36,16 +36,19 @@ This provides per-coroutine stack budgets using only standard C.
 - `test_simple.c` - Simple example with one worker
 - `test_multi_worker.c` - Complex example with 3 workers in round-robin
 - `test_overflow.c` - Verifies the stack-overflow sentinel triggers
+- `test_bad_resumer.c` - Verifies cross-caller resume is detected
 - `LIMITATIONS.md` - Known limitations and constraints
 
 ## Building
 
 ```bash
-make                # Build all examples
-make run-simple     # Run simple example
-make run-multi      # Run multi-worker example
-make run-overflow   # Run overflow-detection test
-make clean          # Clean build artifacts
+make                  # Build all examples
+make test             # Build and run all tests
+make run-simple       # Run simple example
+make run-multi        # Run multi-worker example
+make run-overflow     # Run overflow-detection test
+make run-bad-resumer  # Run cross-caller resume detection test
+make clean            # Clean build artifacts
 ```
 
 ## API Summary

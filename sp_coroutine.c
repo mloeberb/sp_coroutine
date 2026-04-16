@@ -340,6 +340,13 @@ sp_co_result_t sp_co_go(sp_co_pool_handle_t pool, sp_co_handle_t co) {
         return SP_CO_ERR_STATE;
     }
 
+    // A SUSPENDED coroutine must only be resumed by its original caller;
+    // otherwise the caller pointer is silently rerouted, breaking the
+    // asymmetric activation tree the model relies on.
+    if (co->state == SP_CO_STATE_SUSPENDED && co->caller != caller) {
+        return SP_CO_ERR_BAD_RESUMER;
+    }
+
     co->caller = caller;
 
     int frame_to_check;

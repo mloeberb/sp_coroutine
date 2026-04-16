@@ -53,7 +53,7 @@ This is an asymmetric coroutine model by design. Each `sp_co_go()` call records 
 - ✅ Workers can yield back to their caller
 - ✅ Workers can call `sp_co_go()` to activate other coroutines, extending the tree (A → B → C)
 - ❌ Main coroutine cannot yield (it has no caller)
-- ❌ Re-activating a suspended coroutine from a different caller overwrites its caller pointer, breaking the original chain
+- ❌ Re-activating a suspended coroutine from a different caller is rejected with `SP_CO_ERR_BAD_RESUMER`. Only the original caller may resume a SUSPENDED coroutine.
 
 If you need symmetric coroutines (where any coroutine can transfer control to any other without tree constraints), a different library design is required.
 
