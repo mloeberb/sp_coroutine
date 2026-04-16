@@ -9,7 +9,7 @@ LIB_SRC = sp_coroutine.c
 LIB_OBJ = $(LIB_SRC:.c=.o)
 
 # Examples
-EXAMPLES = test_simple test_multi_worker
+EXAMPLES = test_simple test_multi_worker test_overflow
 
 # Default target
 all: $(EXAMPLES)
@@ -19,6 +19,9 @@ test_simple: test_simple.c $(LIB_OBJ)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^
 
 test_multi_worker: test_multi_worker.c $(LIB_OBJ)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^
+
+test_overflow: test_overflow.c $(LIB_OBJ)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^
 
 # Compile library object files
@@ -36,4 +39,7 @@ run-simple: test_simple
 run-multi: test_multi_worker
 	./test_multi_worker
 
-.PHONY: all clean run-simple run-multi
+run-overflow: test_overflow
+	./test_overflow
+
+.PHONY: all clean run-simple run-multi run-overflow

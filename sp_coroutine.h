@@ -32,8 +32,8 @@
  *     if (!pool) return 1;
  *     
  *     sp_co_handle_t main_co = sp_co_add(pool, scheduler, pool);
- *     int ret = sp_co_start(pool, main_co);
- *     
+ *     sp_co_result_t ret = sp_co_start(pool, main_co);
+ *
  *     sp_co_destroy(pool);
  *     return ret;
  * }
@@ -64,26 +64,23 @@ typedef void (*sp_co_func_t)(void* arg);
 /**
  * @brief Error codes returned by library functions
  */
-enum {
+typedef enum {
     SP_CO_OK = 0,                    /**< Operation succeeded */
-    SP_CO_ERR_NOMEM = -1,            /**< Memory allocation failed */
-    SP_CO_ERR_INVALID = -2,          /**< Invalid parameter (NULL handle) */
-    SP_CO_ERR_POOL_FULL = -3,        /**< Pool has reached maximum capacity */
-    SP_CO_ERR_STATE = -4,            /**< Invalid coroutine state for operation */
-    SP_CO_ERR_STACK_OVERFLOW = -5,   /**< Stack sentinel corruption detected */
-    SP_CO_ERR_YIELD_FROM_MAIN = -6,  /**< Attempted yield from main coroutine */
-    SP_CO_ERR_STACK_SIZE = -7        /**< Invalid stack size specified */
-};
+    SP_CO_ERR_INVALID = -1,          /**< Invalid parameter (NULL handle) */
+    SP_CO_ERR_STATE = -2,            /**< Invalid coroutine state for operation */
+    SP_CO_ERR_YIELD_FROM_MAIN = -3,  /**< Attempted yield from main coroutine */
+    SP_CO_ERR_STACK_OVERFLOW = -4    /**< Coroutine exceeded its stack budget */
+} sp_co_result_t;
 
 /**
  * @brief Coroutine states
  */
-enum {
+typedef enum {
     SP_CO_STATE_READY = 0,      /**< Coroutine ready to run (not yet started) */
     SP_CO_STATE_RUNNING = 1,    /**< Coroutine currently executing */
     SP_CO_STATE_SUSPENDED = 2,  /**< Coroutine suspended (yielded) */
     SP_CO_STATE_DEAD = 3        /**< Coroutine finished execution */
-};
+} sp_co_state_t;
 
 /**
  * @brief Create a new coroutine pool
@@ -109,7 +106,7 @@ sp_co_pool_handle_t sp_co_create(size_t max_coroutines, size_t stack_size);
  * @param pool Pool handle to destroy
  * @return SP_CO_OK on success, SP_CO_ERR_INVALID if pool is NULL
  */
-int sp_co_destroy(sp_co_pool_handle_t pool);
+sp_co_result_t sp_co_destroy(sp_co_pool_handle_t pool);
 
 /**
  * @brief Add a coroutine to the pool
@@ -132,9 +129,9 @@ sp_co_handle_t sp_co_add(sp_co_pool_handle_t pool, sp_co_func_t func, void* arg)
  * @param pool Pool handle
  * @param co Coroutine handle to remove
  * @return SP_CO_OK on success, SP_CO_ERR_INVALID if handles are NULL,
- *         SP_CO_ERR_STATE if coroutine is RUNNING
+ *         SP_CO_ERR_STATE if coroutine is RUNNING or already removed
  */
-int sp_co_remove(sp_co_pool_handle_t pool, sp_co_handle_t co);
+sp_co_result_t sp_co_remove(sp_co_pool_handle_t pool, sp_co_handle_t co);
 
 /**
  * @brief Get the currently executing coroutine
@@ -148,10 +145,10 @@ sp_co_handle_t sp_co_current(sp_co_pool_handle_t pool);
  * @brief Query coroutine state
  * 
  * @param co Coroutine handle
- * @param out_state Pointer to receive state value (SP_CO_STATE_*)
+ * @param out_state Pointer to receive the state value
  * @return SP_CO_OK on success, SP_CO_ERR_INVALID if co or out_state is NULL
  */
-int sp_co_state(sp_co_handle_t co, int* out_state);
+sp_co_result_t sp_co_state(sp_co_handle_t co, sp_co_state_t* out_state);
 
 /**
  * @brief Get pool capacity
@@ -183,10 +180,9 @@ size_t sp_co_pool_count(sp_co_pool_handle_t pool);
  * @param co Initial coroutine to run (must be in READY state)
  * @return SP_CO_OK when scheduler completes, or error code:
  *         SP_CO_ERR_INVALID if handles are NULL,
- *         SP_CO_ERR_STATE if pool already started or coroutine not READY,
- *         SP_CO_ERR_STACK_OVERFLOW if stack corruption detected
+ *         SP_CO_ERR_STATE if pool already started or coroutine not READY
  */
-int sp_co_start(sp_co_pool_handle_t pool, sp_co_handle_t co);
+sp_co_result_t sp_co_start(sp_co_pool_handle_t pool, sp_co_handle_t co);
 
 /**
  * @brief Activate a coroutine
@@ -199,10 +195,12 @@ int sp_co_start(sp_co_pool_handle_t pool, sp_co_handle_t co);
  * @param co Coroutine to activate (must be READY or SUSPENDED)
  * @return SP_CO_OK when coroutine yields back, or error code:
  *         SP_CO_ERR_INVALID if handles are NULL,
+ *         SP_CO_ERR_STATE if called from outside a running coroutine,
  *         SP_CO_ERR_STATE if coroutine is not READY or SUSPENDED,
- *         SP_CO_ERR_STACK_OVERFLOW if stack corruption detected
+ *         SP_CO_ERR_STACK_OVERFLOW if the coroutine exceeded its stack budget
+ *             (the pool should be considered unusable after this error)
  */
-int sp_co_go(sp_co_pool_handle_t pool, sp_co_handle_t co);
+sp_co_result_t sp_co_go(sp_co_pool_handle_t pool, sp_co_handle_t co);
 
 /**
  * @brief Yield control back to caller
@@ -213,10 +211,9 @@ int sp_co_go(sp_co_pool_handle_t pool, sp_co_handle_t co);
  * 
  * @param pool Pool handle
  * @return SP_CO_OK when resumed, or error code:
- *         SP_CO_ERR_INVALID if pool is NULL,
- *         SP_CO_ERR_YIELD_FROM_MAIN if called from main coroutine,
- *         SP_CO_ERR_STACK_OVERFLOW if stack corruption detected
+ *         SP_CO_ERR_INVALID if pool is NULL or no coroutine is currently running,
+ *         SP_CO_ERR_YIELD_FROM_MAIN if called from main coroutine
  */
-int sp_co_yield(sp_co_pool_handle_t pool);
+sp_co_result_t sp_co_yield(sp_co_pool_handle_t pool);
 
-#endif /* SP_COROUTINE_H */
+#endif // SP_COROUTINE_H
