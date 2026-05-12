@@ -9,20 +9,19 @@
  * call reserving stack space via alloca. Each frame saves its context; a
  * coroutine is longjmp'd into a frame to run on that frame's stack.
  *
- * Note: all coroutines share one contiguous process stack region. Each frame's
- * alloca reserves stack_size bytes that separate consecutive frames' saved SPs.
- * A coroutine running in frame K grows its stack down past its own SP into
- * frame K+1's alloca region (which is dead space for frame K+1's own coroutine,
- * since that coroutine runs at an even lower SP). We place a magic sentinel
- * at the bottom of frame K+1's alloca region; if coroutine K overflows its
- * stack_size budget by ~stack_size bytes, it corrupts the sentinel, and the
- * overflow is detected on return. Once detected, the pool is unreliable and
- * should be destroyed.
+ * Note: all coroutines share one contiguous process stack region. Frame K's
+ * alloca reserves stack_size bytes immediately below frame K's saved SP, so
+ * the coroutine activated on frame K starts at that saved SP and grows down
+ * into frame K's own alloca region -- which is exactly its per-coroutine
+ * stack budget. A magic sentinel sits at the bottom of each frame's alloca
+ * region; if its coroutine writes past the stack_size budget, it corrupts
+ * the sentinel, and the overflow is detected when the coroutine next yields
+ * or completes. Once detected, the pool is unreliable and should be
+ * destroyed.
  */
 
 #include "sp_coroutine.h"
 #include <stdlib.h>
-#include <setjmp.h>
 #include <string.h>
 #include <stdbool.h>
 #ifdef _MSC_VER
@@ -32,8 +31,46 @@
 #include <alloca.h>
 #endif
 
-#define SP_CO_MIN_STACK_SIZE ((size_t)16 * 1024)       // 16 KB
-#define SP_CO_MAX_STACK_SIZE ((size_t)8 * 1024 * 1024) // 8 MB
+// Context save/restore primitive.
+//
+// MSVC's setjmp on x64/ARM64 routes longjmp through RtlUnwindEx, which only
+// walks the stack upward. This library longjmps both upward (activating a
+// frame) and downward (yielding back to a caller whose frame sits at lower
+// SP than the current one), so on those targets we substitute with
+// RtlCaptureContext / RtlRestoreContext -- pure register save/restore with
+// no unwind walk. Everywhere else (Linux, macOS, MSVC x86, mingw-w64) the
+// standard setjmp/longjmp already behaves this way.
+#if defined(_MSC_VER) && defined(_WIN64)
+    #define WIN32_LEAN_AND_MEAN
+    #include <windows.h>
+
+    typedef struct {
+        CONTEXT ctx;
+        volatile int resume_value;
+    } sp_jmp_buf[1];
+
+    // Macro form (not inline function) so RtlCaptureContext captures the
+    // calling function's frame, not a transient sp_setjmp frame
+    // that would be popped before sp_longjmp ran.
+    #define sp_setjmp(env) \
+        ((env)[0].resume_value = 0, \
+         RtlCaptureContext(&(env)[0].ctx), \
+         (env)[0].resume_value)
+
+    __declspec(noreturn)
+    static void sp_longjmp(sp_jmp_buf env, int val) {
+        env[0].resume_value = (val == 0) ? 1 : val;
+        RtlRestoreContext(&env[0].ctx, NULL);
+    }
+#else
+    #include <setjmp.h>
+    typedef jmp_buf sp_jmp_buf;
+    #define sp_setjmp(env)        setjmp(env)
+    #define sp_longjmp(env, val)  longjmp((env), (val))
+#endif
+
+#define SP_CO_MIN_STACK_SIZE ((size_t)16 * 1024)
+#define SP_CO_MAX_STACK_SIZE ((size_t)8 * 1024 * 1024)
 #define SP_CO_STACK_ALIGN    ((size_t)16)
 #define SP_CO_STACK_MAGIC    ((unsigned int)0x4C4F4542u)
 
@@ -41,7 +78,7 @@
  * @brief Internal coroutine structure
  */
 struct sp_coroutine {
-    jmp_buf context;              // Saved execution context
+    sp_jmp_buf context;           // Saved execution context
     sp_co_state_t state;          // Current state
     sp_co_func_t func;            // User function to execute
     void* arg;                    // Argument for user function
@@ -59,11 +96,11 @@ struct sp_co_pool {
     size_t allocated;                          // Number of allocated slots
     size_t stack_size;                         // Stack budget for each coroutine
     struct sp_coroutine* current;              // Currently executing coroutine
-    jmp_buf main_context;                      // Context to return to from sp_co_start
+    sp_jmp_buf main_context;                   // Context to return to from sp_co_start
     bool started;                              // True if pool has been started
-    jmp_buf* frame_contexts;                   // Saved context for each stack frame
+    sp_jmp_buf* frame_contexts;                // Saved context for each stack frame
     struct sp_coroutine** frame_coroutine;     // Which coroutine owns each frame
-    volatile unsigned int** frame_sentinel;    // Overflow sentinel per frame (NULL for the deepest frame)
+    volatile unsigned int** frame_sentinel;    // Overflow sentinel per frame
 };
 
 static void reset_frame_sentinel(struct sp_co_pool* pool, int frame_index) {
@@ -98,10 +135,10 @@ static void coroutine_exec(struct sp_co_pool* pool, struct sp_coroutine* co) {
     pool->current = co->caller;
 
     if (co->caller) {
-        longjmp(co->caller->context, 1);
+        sp_longjmp(co->caller->context, 1);
     } else {
         // Returning from main coroutine
-        longjmp(pool->main_context, 1);
+        sp_longjmp(pool->main_context, 1);
     }
 }
 
@@ -121,7 +158,7 @@ sp_co_pool_handle_t sp_co_create(size_t max_coroutines, size_t stack_size) {
         return NULL;
     }
 
-    pool->frame_contexts = (jmp_buf*)calloc(max_coroutines, sizeof(jmp_buf));
+    pool->frame_contexts = (sp_jmp_buf*)calloc(max_coroutines, sizeof(sp_jmp_buf));
     if (!pool->frame_contexts) {
         free(pool->coroutines);
         free(pool);
@@ -266,23 +303,24 @@ size_t sp_co_pool_count(sp_co_pool_handle_t pool) {
  * directly; this function is re-entered only on first activations.
  */
 static void recursive_stack_builder(struct sp_co_pool* pool, size_t depth, sp_co_handle_t main_co) {
-    volatile char* stack_space = (volatile char*)alloca(pool->stack_size);
+    if (sp_setjmp(pool->frame_contexts[depth]) == 0) {
+        // alloca after setjmp so the saved sp sits above this frame's
+        // region. The coroutine activated on this frame then grows down
+        // into its own alloca region rather than the next frame's.
+        volatile char* stack_space = (volatile char*)alloca(pool->stack_size);
 
-    // Touch both ends so the compiler cannot elide the allocation and so
-    // Windows page probing commits the full region.
-    stack_space[0] = 0;
-    stack_space[pool->stack_size - 1] = 0;
+        // Touch both ends so the compiler cannot elide the allocation and so
+        // Windows page probing commits the full region.
+        stack_space[0] = 0;
+        stack_space[pool->stack_size - 1] = 0;
 
-    // The previous frame's coroutine grows its stack down into this frame's
-    // alloca region. Place a sentinel at the bottom of that region; it will
-    // be corrupted if the previous coroutine overflows its stack_size budget.
-    if (depth > 0) {
+        // Place a sentinel at the bottom of this frame's alloca region; it
+        // is corrupted if this frame's coroutine overflows its stack_size
+        // budget.
         volatile unsigned int* sentinel = (volatile unsigned int*)stack_space;
         *sentinel = SP_CO_STACK_MAGIC;
-        pool->frame_sentinel[depth - 1] = sentinel;
-    }
+        pool->frame_sentinel[depth] = sentinel;
 
-    if (setjmp(pool->frame_contexts[depth]) == 0) {
         if (depth + 1 < pool->capacity) {
             recursive_stack_builder(pool, depth + 1, main_co);
         } else {
@@ -318,7 +356,7 @@ sp_co_result_t sp_co_start(sp_co_pool_handle_t pool, sp_co_handle_t co) {
 
     pool->started = true;
 
-    if (setjmp(pool->main_context) == 0) {
+    if (sp_setjmp(pool->main_context) == 0) {
         recursive_stack_builder(pool, 0, co);
     }
 
@@ -368,8 +406,8 @@ sp_co_result_t sp_co_go(sp_co_pool_handle_t pool, sp_co_handle_t co) {
         frame_to_check = (int)free_frame;
 
         reset_frame_sentinel(pool, frame_to_check);
-        if (setjmp(caller->context) == 0) {
-            longjmp(pool->frame_contexts[free_frame], 1);
+        if (sp_setjmp(caller->context) == 0) {
+            sp_longjmp(pool->frame_contexts[free_frame], 1);
         }
     } else {
         // Resume suspended coroutine - jump to its saved context
@@ -377,8 +415,8 @@ sp_co_result_t sp_co_go(sp_co_pool_handle_t pool, sp_co_handle_t co) {
         frame_to_check = co->frame_index;
 
         reset_frame_sentinel(pool, frame_to_check);
-        if (setjmp(caller->context) == 0) {
-            longjmp(co->context, 1);
+        if (sp_setjmp(caller->context) == 0) {
+            sp_longjmp(co->context, 1);
         }
     }
 
@@ -409,8 +447,8 @@ sp_co_result_t sp_co_yield(sp_co_pool_handle_t pool) {
     current->state = SP_CO_STATE_SUSPENDED;
     pool->current = current->caller;
 
-    if (setjmp(current->context) == 0) {
-        longjmp(current->caller->context, 1);
+    if (sp_setjmp(current->context) == 0) {
+        sp_longjmp(current->caller->context, 1);
     }
 
     // Resumed

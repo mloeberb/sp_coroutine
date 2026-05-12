@@ -89,7 +89,7 @@ typedef enum {
  * Allocates and initializes a coroutine pool with fixed capacity and
  * uniform stack size for all coroutines. Stack size must be between
  * 16KB and 8MB (validated at runtime).
- * 
+ *
  * @param max_coroutines Maximum number of coroutines in the pool
  * @param stack_size Stack size in bytes for each coroutine (16KB - 8MB)
  * @return Pool handle on success, NULL on failure (invalid stack size or allocation error)

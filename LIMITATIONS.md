@@ -4,16 +4,20 @@
 
 This library uses a **recursive stack-building technique** combined with `setjmp/longjmp` for context switching. During initialization, the library recursively calls a function to build N stack frames (where N is the pool capacity). Each frame reserves `stack_size` bytes via `alloca`, giving each coroutine its own per-frame stack budget without requiring platform-specific assembly or deprecated APIs.
 
+On **MSVC Win64** (x64 and ARM64) the `setjmp`/`longjmp` primitive is replaced by Win32's `RtlCaptureContext`/`RtlRestoreContext` because MSVC's `longjmp` on those targets invokes `RtlUnwindEx`, which only walks the stack upward — incompatible with this library's design (which longjmps in both directions). The substitution is confined to a single ~30-line block at the top of `sp_coroutine.c`; the recursive-frame design is unchanged. All other targets (Linux, macOS, MSVC x86, mingw-w64) use standard `setjmp`/`longjmp` directly.
+
 ## How It Works
 
 The key insight is that recursive function calls create persistent stack frames:
 
 ```c
 void recursive_stack_builder(pool, depth) {
-    char* stack_space = alloca(stack_size);  // This frame's stack
-
     if (setjmp(frame_contexts[depth]) == 0) {
-        // First time: build deeper frames
+        // First time: reserve this frame's stack region, then build deeper
+        // frames. alloca AFTER setjmp so the saved SP sits above this frame's
+        // region; the coroutine activated on this frame then grows down into
+        // its own alloca region rather than the next frame's.
+        char* stack_space = alloca(stack_size);
         if (depth < capacity - 1)
             recursive_stack_builder(pool, depth + 1);
         else
@@ -69,15 +73,26 @@ Both stack sizes and pool capacity are fixed at pool creation time and cannot be
 
 The library is not thread-safe. A pool, and all coroutines in it, must be created and used from a single thread. Multiple threads may each run their own independent pool.
 
-### 8. Windows: Avoid SEH Across Coroutine Boundaries
+### 8. SEH / C++ EH Does Not Unwind Across Coroutine Boundaries
 
-On Windows, MSVC's `setjmp` participates in Structured Exception Handling (SEH) unwinding. `longjmp` unwinds SEH frames between the `setjmp` and `longjmp` points. This library `longjmp`s across many recursive frames, so wrapping coroutine code in `__try`/`__except` (or using libraries that register SEH handlers within coroutine stacks) can lead to unexpected unwinding behaviour. Plain C code in coroutines works as expected.
+The library's context-switch primitive does not invoke stack unwinding. This is true on every supported platform:
+
+- **MSVC Win64** uses `RtlCaptureContext`/`RtlRestoreContext`, which are pure register save/restore.
+- **MSVC x86, mingw-w64, Linux, macOS** use `setjmp`/`longjmp` implementations that do not walk DWARF or chain-based unwind data for ordinary C code.
+
+Consequences:
+
+- `__try`/`__except`/`__finally` blocks and C++ destructors that span a `sp_co_yield` or `sp_co_go` boundary will **not** run when control transfers between coroutines. Cleanup that relies on unwinding (RAII, `__finally`) must complete within a single coroutine activation.
+- Throwing a C++ exception or raising an SEH exception from inside a coroutine is undefined behavior unless caught before the coroutine yields or returns.
+- Plain C code in coroutines works as expected.
+
+Note for MSVC users: from VS 2015 onward, MSVC's standard `longjmp` on x64/ARM64 *does* invoke `RtlUnwindEx`, but the library bypasses this by substituting `RtlRestoreContext` (see Implementation Approach). The library's behavior is therefore consistent across all supported platforms and toolchains.
 
 ## What Works
 
 ✅ **Multiple yields and resumes** - Coroutines can yield and be resumed unlimited times
 ✅ **Round-robin scheduling** - Multiple coroutines can be scheduled cooperatively
-✅ **Portable C99** - No assembly, no deprecated APIs, builds on Windows (cl), Linux, and macOS
+✅ **Portable C99** - No assembly, no deprecated APIs; builds on Windows (cl, x86/x64/ARM64), Linux, and macOS. On MSVC Win64 a thin `RtlCaptureContext`/`RtlRestoreContext` shim replaces `setjmp`/`longjmp`; all other targets use `setjmp`/`longjmp` directly.
 ✅ **Per-coroutine stack budgets** - Each coroutine gets its own `stack_size`-byte region via recursive frames
 ✅ **Best-effort overflow detection** - Sentinels detect most stack overflows (see limitation #1)
 
