@@ -143,7 +143,7 @@ static void coroutine_exec(struct sp_co_pool* pool, struct sp_coroutine* co) {
 }
 
 sp_co_pool_handle_t sp_co_create(size_t max_coroutines, size_t stack_size) {
-    if (stack_size < SP_CO_MIN_STACK_SIZE || stack_size > SP_CO_MAX_STACK_SIZE) {
+    if (stack_size < SP_CO_MIN_STACK_SIZE || SP_CO_MAX_STACK_SIZE < stack_size) {
         return NULL;
     }
 
@@ -371,7 +371,7 @@ sp_co_result_t sp_co_go(sp_co_pool_handle_t pool, sp_co_handle_t co) {
     // sp_co_go must be called from within a running coroutine
     struct sp_coroutine* caller = pool->current;
     if (!caller) {
-        return SP_CO_ERR_STATE;
+        return SP_CO_ERR_OUTSIDE_COROUTINE;
     }
 
     if (co->state != SP_CO_STATE_READY && co->state != SP_CO_STATE_SUSPENDED) {
